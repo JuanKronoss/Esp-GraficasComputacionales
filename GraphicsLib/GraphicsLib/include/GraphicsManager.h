@@ -42,7 +42,7 @@ class GraphicsManager
 
  private:
 
-  Vector<IDXGIAdapter1*>
+  Vector<DXGIAdapter*>
   GetAdapters();
 
   D3DDevice* m_pDevice = nullptr;

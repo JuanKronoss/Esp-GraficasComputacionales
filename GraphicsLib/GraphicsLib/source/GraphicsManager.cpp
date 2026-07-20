@@ -72,13 +72,13 @@ GraphicsManager::GraphicsManager(void* srcHandle)
   swapChainDesc.SampleDesc.Count = 1;
   swapChainDesc.SampleDesc.Quality = 0;
 
-  IDXGIDevice* pDXGIDevice = nullptr;
-  IDXGIAdapter* pAdapter = nullptr;
-  IDXGIFactory* pFactory = nullptr;
+  DXGIDevice* pDXGIDevice = nullptr;
+  DXGIAdapter* pAdapter = nullptr;
+  DXGIFactory* pFactory = nullptr;
 
-  ThrowIfFailed(m_pDevice->QueryInterface(__uuidof(IDXGIDevice), (void**)&pDXGIDevice));
+  ThrowIfFailed(m_pDevice->QueryInterface(__uuidof(DXGIDevice), (void**)&pDXGIDevice));
   ThrowIfFailed(pDXGIDevice->GetAdapter(&pAdapter));
-  ThrowIfFailed(pAdapter->GetParent(__uuidof(IDXGIFactory), (void**)&pFactory));
+  ThrowIfFailed(pAdapter->GetParent(__uuidof(DXGIFactory), (void**)&pFactory));
   ThrowIfFailed(pFactory->CreateSwapChain(m_pDevice, &swapChainDesc, &m_pSwapChain));
 
 #elif USING(DX_VERSION_11_1) || USING(DX_VERSION_11_2) || USING(DX_VERSION_11_3) || USING(DX_VERSION_11_4)
@@ -105,8 +105,13 @@ GraphicsManager::GraphicsManager(void* srcHandle)
   ThrowIfFailed(m_pDevice->QueryInterface(__uuidof(IDXGIDevice1), (void**)&pDXGIDevice));
   ThrowIfFailed(pDXGIDevice->GetAdapter(&pAdapter));
   ThrowIfFailed(pAdapter->GetParent(__uuidof(IDXGIFactory2), (void**)&pFactory));
-
+#if USING(DX_VERSION_11_1)
   ThrowIfFailed(pFactory->CreateSwapChainForHwnd(m_pDevice, hWnd, &swapChainDesc, nullptr, nullptr, &m_pSwapChain));
+#elif USING(DX_VERSION_11_2) || USING(DX_VERSION_11_3) || USING(DX_VERSION_11_4)
+  IDXGISwapChain1* pSwapChain1 = nullptr;
+  ThrowIfFailed(pFactory->CreateSwapChainForHwnd(m_pDevice, hWnd, &swapChainDesc, nullptr, nullptr, &pSwapChain1));
+  m_pSwapChain = GetAs<SwapChain>(pSwapChain1);
+#endif
   ThrowIfFailed(pDXGIDevice->SetMaximumFrameLatency(3));
 
 #endif
@@ -122,8 +127,12 @@ GraphicsManager::CreateBackBuffer()
   SAFE_RELEASE(m_pBackBuffer);
   SAFE_RELEASE(m_pBackBufferRTV);
 
-  ThrowIfFailed(m_pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&m_pBackBuffer));
+  ThrowIfFailed(m_pSwapChain->GetBuffer(0, __uuidof(D3DTexture2D), (void**)&m_pBackBuffer));
+#if USING(DX_VERSION_11_0) || USING(DX_VERSION_11_1) || USING(DX_VERSION_11_2)
   ThrowIfFailed(m_pDevice->CreateRenderTargetView(m_pBackBuffer, nullptr, &m_pBackBufferRTV));
+#elif USING(DX_VERSION_11_3) || USING(DX_VERSION_11_4)
+  ThrowIfFailed(m_pDevice->CreateRenderTargetView1(m_pBackBuffer, nullptr, &m_pBackBufferRTV));
+#endif
 
 }
 
@@ -177,7 +186,14 @@ GraphicsManager::SetRenderTarget(RenderTargetView* pRTV, DepthStencilView* pDSV)
     pDSTarget = pDSV;
   }
 
+#if USING(DX_VERSION_11_0) || USING(DX_VERSION_11_1) || USING(DX_VERSION_11_2)
   m_pActiveContext->OMSetRenderTargets(1, &pTarget, pDSTarget);
+#elif USING(DX_VERSION_11_3) || USING(DX_VERSION_11_4)
+  ID3D11RenderTargetView* pTarget0 = nullptr;
+  pTarget0 = GetAs<ID3D11RenderTargetView1>(pTarget);
+  m_pActiveContext->OMSetRenderTargets(1, &pTarget0, pDSTarget);
+
+#endif
 }
 
 void
@@ -189,21 +205,37 @@ GraphicsManager::ClearRenderTarget(RenderTargetView* pRTV, const float clearColo
 void
 GraphicsManager::Present(uint32 syncInterval, uint32 presentFlags)
 {
+#if USING(DX_VERSION_11_0)
+  m_pSwapChain->Present(syncInterval, presentFlags);
+#elif USING(DX_VERSION_11_1) || USING(DX_VERSION_11_2) || USING(DX_VERSION_11_3) || USING(DX_VERSION_11_4)
   DXGI_PRESENT_PARAMETERS presentParameters;
   memset(&presentParameters, 0, sizeof(DXGI_PRESENT_PARAMETERS));
   m_pSwapChain->Present1(syncInterval, presentFlags, &presentParameters);
+#endif
 }
 
-Vector<IDXGIAdapter1*>
+Vector<DXGIAdapter*>
 GraphicsManager::GetAdapters()
 {
-  Vector<IDXGIAdapter1*> vecAdapters;
+  Vector<DXGIAdapter*> vecAdapters;
 
-  IDXGIFactory1* pFactory = nullptr;
-  IDXGIAdapter1* pAdapter = nullptr;
+  DXGIFactory* pFactory = nullptr;
+  DXGIAdapter* pAdapter = nullptr;
 
   // Enumerate adapters
-  ThrowIfFailed(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&pFactory));
+#if USING(DX_VERSION_11_0)
+  ThrowIfFailed(CreateDXGIFactory1(__uuidof(DXGIFactory), (void**)&pFactory));
+
+  for (UINT i = 0; pFactory->EnumAdapters(i, &pAdapter) != DXGI_ERROR_NOT_FOUND; ++i)
+  {
+    DXGI_ADAPTER_DESC desc;
+    pAdapter->GetDesc(&desc);
+
+    vecAdapters.push_back(pAdapter);
+  }
+
+#elif USING(DX_VERSION_11_1) || USING(DX_VERSION_11_2) || USING(DX_VERSION_11_3) || USING(DX_VERSION_11_4)
+  ThrowIfFailed(CreateDXGIFactory1(__uuidof(DXGIFactory), (void**)&pFactory));
 
   for (UINT i = 0; pFactory->EnumAdapters1(i, &pAdapter) != DXGI_ERROR_NOT_FOUND; ++i)
   {
@@ -212,6 +244,8 @@ GraphicsManager::GetAdapters()
 
     vecAdapters.push_back(pAdapter);
   }
+
+#endif
 
   SAFE_RELEASE(pFactory);
 
